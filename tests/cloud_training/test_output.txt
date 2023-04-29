@@ -1,0 +1,35 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.6, pytest-7.3.1, pluggy-1.0.0 -- /home/mohammad/.pyenv/versions/3.10.6/envs/taxifare-env/bin/python3.10
+cachedir: .pytest_cache
+rootdir: /home/mohammad/code/moe-auda/data-train-in-the-cloud/tests
+configfile: pytest_kitt.ini
+collecting ... collected 9 items
+
+tests/cloud_training/test_cloud_data.py::TestCloudData::test_big_query_dataset_variable_exists PASSED [ 11%]
+tests/cloud_training/test_cloud_data.py::TestCloudData::test_cloud_data_create_dataset PASSED [ 22%]
+tests/cloud_training/test_cloud_data.py::TestCloudData::test_cloud_data_create_table PASSED [ 33%]
+tests/cloud_training/test_main.py::TestMain::test_route_preprocess PASSED [ 44%]
+tests/cloud_training/test_main.py::TestMain::test_route_train[local] PASSED [ 55%]
+tests/cloud_training/test_main.py::TestMain::test_route_train[gcs] PASSED [ 66%]
+tests/cloud_training/test_main.py::TestMain::test_route_evaluate PASSED  [ 77%]
+tests/cloud_training/test_main.py::TestMain::test_route_pred PASSED      [ 88%]
+tests/cloud_training/test_vm.py::test_i_am_a_vm FAILED                   [100%]
+
+=================================== FAILURES ===================================
+________________________________ test_i_am_a_vm ________________________________
+
+    def test_i_am_a_vm():
+        """
+        Test that this code is being run from a Google VM named as per env variable 'INSTANCE'
+        """
+    
+>       assert platform.node() == INSTANCE, f"You should be running from your instance named '{INSTANCE}'."
+E       AssertionError: You should be running from your instance named 'taxi-instance'.
+E       assert 'NDUSERCA1003' == 'taxi-instance'
+E         - taxi-instance
+E         + NDUSERCA1003
+
+tests/cloud_training/test_vm.py:9: AssertionError
+=========================== short test summary info ============================
+FAILED tests/cloud_training/test_vm.py::test_i_am_a_vm - AssertionError: You ...
+================== 1 failed, 8 passed, 18 warnings in 57.44s ===================

@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+from google.cloud import bigquery
 from pathlib import Path
 from colorama import Fore, Style
 from dateutil.parser import parse
@@ -32,15 +33,72 @@ def preprocess(min_date:str = '2009-01-01', max_date:str = '2015-01-01') -> None
         ORDER BY pickup_datetime
     """
 
-    pass  # YOUR CODE HERE
+    # Retrieve `query` data as a DataFrame iterable
+    data_query_cache_path = Path(LOCAL_DATA_PATH).joinpath("raw", f"query_{min_date}_{max_date}_{DATA_SIZE}.csv")
+    data_processed_path = Path(LOCAL_DATA_PATH).joinpath("processed", f"processed_{min_date}_{max_date}_{DATA_SIZE}.csv")
 
-    # Process data
-    pass  # YOUR CODE HERE
-    # Load a DataFrame onto BigQuery containing [pickup_datetime, X_processed, y]
-    # using data.load_data_to_bq()
-    pass  # YOUR CODE HERE
+    data_query_cache_exists = data_query_cache_path.is_file()
+    if data_query_cache_exists:
+        print("Get a DataFrame iterable from local CSV...")
+        chunks = None
+
+        chunks = pd.read_csv(
+            data_query_cache_path,
+            chunksize=CHUNK_SIZE,
+            parse_dates=["pickup_datetime"]
+        )
+    else:
+        print("Get a DataFrame iterable from querying the BigQuery server...")
+        chunks = None
+
+        # 🎯 HINT: `bigquery.Client(...).query(...).result(page_size=...).to_dataframe_iterable()`
+        client = bigquery.Client(project=GCP_PROJECT)
+
+        query_job = client.query(query)
+        result = query_job.result(page_size=CHUNK_SIZE)
+
+        chunks = result.to_dataframe_iterable()
+
+    for chunk_id, chunk in enumerate(chunks):
+        print(f"Processing chunk {chunk_id}...")
+
+        # Clean chunk
+        chunk_clean = clean_data(chunk)
+
+        # Create chunk_processed
+        # 🎯 HINT: create (`X_chunk`, `y_chunk`), process only `X_processed_chunk`, then concatenate (X_processed_chunk, y_chunk)
+        X_chunk = chunk_clean.drop("fare_amount", axis=1)
+        y_chunk = chunk_clean[["fare_amount"]]
+        X_processed_chunk = preprocess_features(X_chunk)
+
+        chunk_processed = pd.DataFrame(np.concatenate((X_processed_chunk, y_chunk), axis=1))
+
+        # Save and append the processed chunk to a local CSV at "data_processed_path"
+        # 🎯 HINT: df.to_csv(mode=...)
+        # 🎯 HINT: we want a CSV with neither index nor headers (they'd be meaningless)
+        chunk_processed.to_csv(
+            data_processed_path,
+            mode="w" if chunk_id==0 else "a",
+            header=False,
+            index=False,
+        )
+
+        # Save and append the raw chunk `if not data_query_cache_exists`
+        # 🎯 HINT: we want a CSV with headers this time
+        # 🎯 HINT: only the first chunk should store headers
+        if not data_query_cache_exists:
+            chunk.to_csv(
+                data_query_cache_path,
+                mode="w" if chunk_id==0 else "a",
+                header=True if chunk_id==0 else False,
+                index=False
+            )
+
+    print(f"✅ data query saved as {data_query_cache_path}")
+    print("✅ preprocess() done")
 
     print("✅ preprocess() done \n")
+
 def train(
         min_date:str = '2009-01-01',
         max_date:str = '2015-01-01',
@@ -64,24 +122,71 @@ def train(
     min_date = parse(min_date).strftime('%Y-%m-%d') # e.g '2009-01-01'
     max_date = parse(max_date).strftime('%Y-%m-%d') # e.g '2009-01-01'
 
-    # Load processed data using `get_data_with_cache` in chronological order
-    # Try it out manually on console.cloud.google.com first!
+    data_processed_path = Path(LOCAL_DATA_PATH).joinpath("processed", f"processed_{min_date}_{max_date}_{DATA_SIZE}.csv")
+    model = None
+    metrics_val_list = []  # store the val_mae of each chunk
 
-    pass  # YOUR CODE HERE
+    # Iterate in chunks and partially fit on each chunk
+    chunks = pd.read_csv(
+        data_processed_path,
+        chunksize=CHUNK_SIZE,
+        header=None,
+        dtype=DTYPES_PROCESSED
+    )
 
-    # Create (X_train_processed, y_train, X_val_processed, y_val)
-    pass  # YOUR CODE HERE
+    for chunk_id, chunk in enumerate(chunks):
+        print(f"Training on preprocessed chunk n°{chunk_id}")
 
-    # Train model using `model.py`
-    pass  # YOUR CODE HERE
+        # You can adjust training params for each chunk if you want!
+        learning_rate = 0.0005
+        batch_size = 256
+        patience=2
+        split_ratio = 0.1 # Higher train/val split ratio when chunks are small! Feel free to adjust.
+
+        # Create (X_train_chunk, y_train_chunk, X_val_chunk, y_val_chunk)
+        train_length = int(len(chunk)*(1-split_ratio))
+        chunk_train = chunk.iloc[:train_length, :].sample(frac=1).to_numpy()
+        chunk_val = chunk.iloc[train_length:, :].sample(frac=1).to_numpy()
+
+        X_train_chunk = chunk_train[:, :-1]
+        y_train_chunk = chunk_train[:, -1]
+        X_val_chunk = chunk_val[:, :-1]
+        y_val_chunk = chunk_val[:, -1]
+
+        # Train a model *incrementally*, and store the val_mae of each chunk in `metrics_val_list`
+        if model is None:
+            model = initialize_model(input_shape=X_train_chunk.shape[1:])
+
+        model = compile_model(model, learning_rate)
+
+        model, history = train_model(
+            model,
+            X_train_chunk,
+            y_train_chunk,
+            batch_size=batch_size,
+            patience=patience,
+            validation_data=(X_val_chunk, y_val_chunk)
+        )
+
+        metrics_val_chunk = np.min(history.history['val_mae'])
+        metrics_val_list.append(metrics_val_chunk)
+
+        print(metrics_val_chunk)
+
+    # Return the last value of the validation MAE
+    val_mae = metrics_val_list[-1]
+
+    # Save model and training params
+    params = dict(
+        learning_rate=learning_rate,
+        batch_size=batch_size,
+        patience=patience,
+        incremental=True,
+        chunk_size=CHUNK_SIZE
+    )
 
     val_mae = np.min(history.history['val_mae'])
 
-    params = dict(
-        context="train",
-        training_set_size=DATA_SIZE,
-        row_count=len(X_train_processed),
-    )
 
     # Save results on the hard drive using taxifare.ml_logic.registry
     save_results(params=params, metrics=dict(mae=val_mae))
@@ -111,7 +216,21 @@ def evaluate(
     max_date = parse(max_date).strftime('%Y-%m-%d') # e.g '2009-01-01'
 
     # Query your BigQuery processed table and get data_processed using `get_data_with_cache`
-    pass  # YOUR CODE HERE
+
+    data_processed_path = Path(LOCAL_DATA_PATH).joinpath("processed", f"processed_{min_date}_{max_date}_{DATA_SIZE}.csv")
+
+    query = f"""
+        SELECT {",".join(COLUMN_NAMES_RAW)}
+        FROM {GCP_PROJECT_WAGON}.{BQ_DATASET}.raw_{DATA_SIZE}
+        WHERE pickup_datetime BETWEEN '{min_date}' AND '{max_date}'
+        ORDER BY pickup_datetime
+    """
+    data_processed = get_data_with_cache(
+        GCP_PROJECT_WAGON,
+        query,
+        data_processed_path,
+        data_has_header=True
+    )
 
     if data_processed.shape[0] == 0:
         print("❌ No data to evaluate on")
